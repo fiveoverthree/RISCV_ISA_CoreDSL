@@ -1,0 +1,87 @@
+import "RVI.core_desc"
+import "RISCVBase.core_desc"
+import "RVV.core_desc"
+
+InstructionSet RVZvvi32mm extends RVZve32x {
+    // Integer Matrix Multiplication
+    functions {
+        extern unsigned<8> vmmacc_vv(char* vector_field, unsigned<XLEN> vtype, unsigned<8> vd, unsigned<8> vs1, unsigned<8> vs2, unsigned<16> vstart, unsigned<32> vlen);
+        extern unsigned<8> vwmmacc_vv(char* vector_field, unsigned<XLEN> vtype, unsigned<8> vd, unsigned<8> vs1, unsigned<8> vs2, unsigned<16> vstart, unsigned<32> vlen);
+        extern unsigned<8> vqwmmacc_vv(char* vector_field, unsigned<XLEN> vtype, unsigned<8> vd, unsigned<8> vs1, unsigned<8> vs2, unsigned<16> vstart, unsigned<32> vlen);
+    }
+
+    instructions {
+        VMMACC_VV {
+            // [vmmacc.vv] [vm] [vs2] [vs1] [OPIVV] [vd] [OP-V]
+            // [111000]    [1]  [vs2] [vs1] [000]   [vd] [1010111]
+            encoding: 6'b111000 :: 1'b1 :: vs2[4:0] :: vs1[4:0] :: 3'b000 :: vd[4:0] :: 7'b1010111;
+            assembly:"{name(vd)}, {name(vs2)}, {name(vs1)}";
+            behavior: {
+                unsigned<XLEN> vtype = CSR[VTYPE_ADDR];
+                unsigned<XLEN> vstart = CSR[VSTART_ADDR];
+                // unsigned<XLEN> vl = CSR[VL_ADDR];
+                unsigned<XLEN> vlen = CSR[VLENB_ADDR]*8;
+                unsigned<XLEN> ret = vmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen);
+                CSR[VSTART_ADDR] = 0;
+            }
+        }
+
+        VWMMACC_VV {
+            // [vwmmacc.vv] [vm] [vs2] [vs1] [OPIVV] [vd] [OP-V]
+            // [111001]     [1]  [vs2] [vs1] [000]   [vd] [1010111]
+            encoding: 6'b111001 :: 1'b1 :: vs2[4:0] :: vs1[4:0] :: 3'b000 :: vd[4:0] :: 7'b1010111;
+            assembly:"{name(vd)}, {name(vs2)}, {name(vs1)}";
+            behavior: {
+                unsigned<XLEN> vtype = CSR[VTYPE_ADDR];
+                unsigned<XLEN> vstart = CSR[VSTART_ADDR];
+                // unsigned<XLEN> vl = CSR[VL_ADDR];
+                unsigned<XLEN> vlen = CSR[VLENB_ADDR]*8;
+                unsigned<XLEN> ret = vwmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen);
+                CSR[VSTART_ADDR] = 0;
+            }
+        }
+
+        VQWMMACC_VV {
+            // [vqwmmacc.vv] [vm] [vs2] [vs1] [OPIVV] [vd] [OP-V]
+            // [111010]      [1]  [vs2] [vs1] [000]   [vd] [1010111]
+            encoding: 6'b111010 :: 1'b1 :: vs2[4:0] :: vs1[4:0] :: 3'b000 :: vd[4:0] :: 7'b1010111;
+            assembly:"{name(vd)}, {name(vs2)}, {name(vs1)}";
+            behavior: {
+                unsigned<XLEN> vtype = CSR[VTYPE_ADDR];
+                unsigned<XLEN> vstart = CSR[VSTART_ADDR];
+                // unsigned<XLEN> vl = CSR[VL_ADDR];
+                unsigned<XLEN> vlen = CSR[VLENB_ADDR]*8;
+                unsigned<XLEN> ret = vqwmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen);
+                CSR[VSTART_ADDR] = 0;
+            }
+        }
+    }
+}
+
+InstructionSet RVZvvf32mm extends RVZve32f {
+    // Integer Matrix Multiplication
+    functions {
+        extern unsigned<8> vfmmacc_vv(char* vector_field, unsigned<XLEN> vtype, unsigned<8> vd, unsigned<8> vs1, unsigned<8> vs2, unsigned<16> vstart, unsigned<32> vlen, unsigned<8> rounding_mode);
+    }
+
+    instructions {
+        VFMMACC_VV {
+            // [vfmmacc.vv] [vm] [vs2] [vs1] [OPFVV] [vd] [OP-V]
+            // [010100]     [1]  [vs2] [vs1] [001]   [vd] [1010111]
+            encoding: 6'b010100 :: 1'b1 :: vs2[4:0] :: vs1[4:0] :: 3'b001 :: vd[4:0] :: 7'b1010111;
+            assembly:"{name(vd)}, {name(vs2)}, {name(vs1)}";
+            behavior: {
+                unsigned<XLEN> vtype = CSR[VTYPE_ADDR];
+                unsigned<XLEN> vstart = CSR[VSTART_ADDR];
+                unsigned<XLEN> vlen = CSR[VLENB_ADDR]*8;
+                unsigned<XLEN> rounding_mode = FCSR[7:5];
+                unsigned<XLEN> ret = vfmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen, rounding_mode);
+                CSR[VSTART_ADDR] = 0;
+            }
+        }
+    }
+}
+
+InstructionSet RV32ZVMM extends RVZvvi32mm, RVZvvf32mm {
+    
+}
