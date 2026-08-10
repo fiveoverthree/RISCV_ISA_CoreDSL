@@ -19,9 +19,9 @@ InstructionSet RVZvvi32mm extends RVZve32x {
             behavior: {
                 unsigned<XLEN> vtype = CSR[VTYPE_ADDR];
                 unsigned<XLEN> vstart = CSR[VSTART_ADDR];
-                // unsigned<XLEN> vl = CSR[VL_ADDR];
+                unsigned<XLEN> vl = CSR[VL_ADDR];
                 unsigned<XLEN> vlen = CSR[VLENB_ADDR]*8;
-                unsigned<XLEN> ret = vmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen);
+                unsigned<XLEN> ret = vmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen, vl);
                 CSR[VSTART_ADDR] = 0;
             }
         }
@@ -34,9 +34,9 @@ InstructionSet RVZvvi32mm extends RVZve32x {
             behavior: {
                 unsigned<XLEN> vtype = CSR[VTYPE_ADDR];
                 unsigned<XLEN> vstart = CSR[VSTART_ADDR];
-                // unsigned<XLEN> vl = CSR[VL_ADDR];
+                unsigned<XLEN> vl = CSR[VL_ADDR];
                 unsigned<XLEN> vlen = CSR[VLENB_ADDR]*8;
-                unsigned<XLEN> ret = vwmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen);
+                unsigned<XLEN> ret = vwmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen, vl);
                 CSR[VSTART_ADDR] = 0;
             }
         }
@@ -49,12 +49,309 @@ InstructionSet RVZvvi32mm extends RVZve32x {
             behavior: {
                 unsigned<XLEN> vtype = CSR[VTYPE_ADDR];
                 unsigned<XLEN> vstart = CSR[VSTART_ADDR];
-                // unsigned<XLEN> vl = CSR[VL_ADDR];
+                unsigned<XLEN> vl = CSR[VL_ADDR];
                 unsigned<XLEN> vlen = CSR[VLENB_ADDR]*8;
-                unsigned<XLEN> ret = vqwmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen);
+                unsigned<XLEN> ret = vqwmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen, vl);
                 CSR[VSTART_ADDR] = 0;
             }
         }
+        
+        /* Overwriting these is necessary to set the lambda field */
+        VSETVLI {
+            // encoding: 1'b0 :: 1'b0 :: zimm[9:0] :: uimm[4:0] :: 3'b111 :: rd[4:0] :: 7'b1010111;
+            encoding: 1'b0 :: zimm[10:0] :: rs1[4:0] :: 3'b111 :: rd[4:0] :: 7'b1010111;
+            assembly:"{name(rd)}, {name(rs1)}, {zimm}";
+            behavior: {
+                // if(!(CSR[RV_CSR_MSTATUS] & RV_MSTATUS_VS)){
+                //     raise(0, 2);  // vpu not enabled
+                // }
+
+                unsigned<3> sew[3]  = vtype_extractSEW(zimm);
+                unsigned<3> lmul[3] = vtype_extractLMUL(zimm);
+                unsigned<1> vta[1]  = vtype_extractTA(zimm);
+                unsigned<1> vma[1]  = vtype_extractMA(zimm);
+
+                unsigned<32> vtype_result = zimm;
+                unsigned<32> _vlmax = 0;
+                // unsigned<32> _illmask = 0;
+
+                unsigned<32> vlen = CSR[VLENB_ADDR]*8;
+
+                if (sew == 0b011 && XLEN == 32) {
+                    vtype_result = (1 << (XLEN - 1)); 
+                }
+
+                if (lmul & 4) {
+                    // _illmask = (1 << (XLEN-1));
+                    if(lmul == 6) {
+                        _vlmax = vlen / (0x8 << sew) / 4;
+                    } else if(lmul == 7) {
+                        _vlmax = vlen / (0x8 << sew) / 2;
+                    } else {
+                        // For XLEN=32: unsupported!
+                        if (XLEN == 32) {
+                            vtype_result = (1 << (XLEN - 1)); 
+                        } else {
+                            _vlmax = vlen / (0x8 << sew) / 8;
+                        }
+                        // _vlmax = vlen / (0x8 << sew) / 8;
+                    }
+                } else {
+                    // _illmask = (0 << (XLEN-1));
+                    if(lmul == 0) {
+                        _vlmax = vlen / (0x8 << sew);
+                    } else if(lmul == 1) {
+                        _vlmax = vlen / (0x8 << sew) *2;
+                    } else if(lmul == 2) {
+                        _vlmax = vlen / (0x8 << sew) *4;
+                    } else if(lmul == 3) {
+                        _vlmax = vlen / (0x8 << sew) *8;
+                    }
+                }
+
+                unsigned<32> _avl = 0;
+                if (rs1 != 0){
+                    _avl = X[rs1];
+                }else if(rd != 0){
+                    _avl = ~0;
+                }else{
+                    _avl = CSR[VL_ADDR];
+                }
+
+                unsigned<32> _vl = 0;
+
+                if(_avl <= _vlmax) {
+                   _vl = _avl;
+                } else if(_avl >= (2*_vlmax)) {
+                   _vl = _vlmax;
+                } else {
+                  // TODO: check
+                  // _vl = (_avl % 0x2) ?  _avl/2 + 1 : _avl / 2; // ceil (AVL/2)
+                  _vl = _vlmax;
+                }
+
+                // should use the biggest supported lambda value
+                unsigned<32> L[32] = (vlen / (0x8 << sew));
+                if (((L & (L - 1)) == 0) && L < 8192){
+                    // L is power of 2 and three bits are enough for setting lambda
+                    unsigned<3> i[3] = 1;
+                    while (L >= 4){
+                        L = L >> 2;
+                        i += 1;
+                    }
+                    vtype_result &= ~(0x7 << XLEN-4); // clear xlen-2:xlen-4
+                    vtype_result |= i << (XLEN-4);
+                } else {
+                    vtype_result &= ~(0x7 << XLEN-4);
+                }
+
+                CSR[VL_ADDR] = _vl;
+                // CSR[VTYPE_ADDR] = _illmask | zimm;
+                CSR[VTYPE_ADDR] = vtype_result;
+                if(rd != 0) X[rd] = _vl;
+                CSR[VSTART_ADDR] = 0;
+            }
+        }
+
+        VSETIVLI {
+            encoding: 1'b1 :: 1'b1 :: vtypei[9:0] :: uimm[4:0] :: 3'b111 :: rd[4:0] :: 7'b1010111;
+            assembly:"{name(rd)}, {uimm}, {vtypei}";
+            behavior: {
+                // TODO: Missing
+                unsigned<3> sew[3]  = vtype_extractSEW(vtypei);
+                unsigned<3> lmul[3] = vtype_extractLMUL(vtypei);
+                unsigned<1> vta[1]  = vtype_extractTA(vtypei);
+                unsigned<1> vma[1]  = vtype_extractMA(vtypei);
+
+                unsigned<32> _vlmax = 0;
+                unsigned<32> vtype_result = vtypei;
+                unsigned<32> vlen = CSR[VLENB_ADDR] * 8;
+
+                if (sew == 0b011 && XLEN == 32) {
+                    vtype_result = (1 << (XLEN - 1)); 
+                }
+
+                if (lmul & 4) {
+                    if(lmul == 6) {
+                        _vlmax = vlen / (0x8 << sew) / 4;
+                    } else if(lmul == 7) {
+                        _vlmax = vlen / (0x8 << sew) / 2;
+                    } else {
+                        // For XLEN=32: unsupported!
+                        if (XLEN == 32) {
+                            vtype_result = (1 << (XLEN - 1)); 
+                        } else {
+                            _vlmax = vlen / (0x8 << sew) / 8;
+                        }
+                    }
+                } else {
+                    if(lmul == 0){
+                        _vlmax = vlen / (0x8 << sew);
+                    } else if(lmul == 1) {
+                        _vlmax = vlen / (0x8 << sew) * 2;
+                    } else if(lmul == 2) {
+                        _vlmax = vlen / (0x8 << sew) * 4;
+                    } else if(lmul == 3) {
+                        _vlmax = vlen / (0x8 << sew) * 8;
+                    }
+                }
+
+                unsigned<32> _avl = uimm;
+                unsigned<32> _vl = 0;
+                if(_avl <= _vlmax) {
+                   _vl = _avl;
+                } else if(_avl >= (2*_vlmax)) {
+                   _vl = _vlmax;
+                } else {
+                  // TODO: check
+                  // _vl = (_avl % 0x2) ?  _avl/2 + 1 : _avl / 2; // ceil (AVL/2)
+                  _vl = _vlmax;
+                }
+                
+                // should use the biggest supported lambda value
+                unsigned<32> L[32] = (vlen / (0x8 << sew));
+                if (((L & (L - 1)) == 0) && L < 8192){
+                    // L is power of 2 and three bits are enough for setting lambda
+                    unsigned<3> i[3] = 1;
+                    while (L >= 4){
+                        L = L >> 2;
+                        i += 1;
+                    }
+                    vtype_result &= ~(0x7 << XLEN-4); // clear xlen-2:xlen-4
+                    vtype_result |= i << (XLEN-4);
+                } else {
+                    vtype_result &= ~(0x7 << XLEN-4);
+                }
+
+                CSR[VL_ADDR] = _vl;
+                CSR[VTYPE_ADDR] = vtype_result;
+                if(rd != 0) X[rd] = _vl;
+                CSR[VSTART_ADDR] = 0;
+            }
+        }
+
+        VSETVL {
+            encoding: 1'b1 :: 6'b000000 :: rs2[4:0] :: rs1[4:0] :: 3'b111 :: rd[4:0] :: 7'b1010111;
+            assembly:"{name(rd)}, {name(rs1)}, {name(rs2)}";
+            behavior: {
+
+                unsigned<XLEN> zimm[XLEN] = X[rs2];
+                // unsigned<11> zimm[11] = X[rs2];
+                unsigned<3> sew[3]  =  vtype_extractSEW(zimm);
+                unsigned<3> lmul[3] =  vtype_extractLMUL(zimm);
+                unsigned<1> vta[1]  =  vtype_extractTA(zimm);
+                unsigned<1> vma[1]  =  vtype_extractMA(zimm);
+                unsigned<3> lambda[3] = (zimm >> 28);
+
+                unsigned<XLEN> _vlmax = 0;
+                // unsigned<XLEN> _illmask = 0;
+                unsigned<32> vtype_result = zimm;
+
+                unsigned<XLEN> _vlen = CSR[VLENB_ADDR]*8;
+
+                if (sew == 0b011 && XLEN == 32) {
+                    vtype_result = (1 << (XLEN - 1)); 
+                }
+
+                if (lmul & 4){
+                    // _illmask = (1 << (XLEN-1));
+                    if(lmul == 6){
+                        _vlmax = _vlen / (0x8 << sew) / 4;
+                    }else if(lmul == 7){
+                        _vlmax = _vlen / (0x8 << sew) / 2;
+                    }else{
+                        // For XLEN=32: unsupported!
+                        if (XLEN == 32) {
+                            vtype_result = (1 << (XLEN - 1)); 
+                        } else {
+                            _vlmax = _vlen / (0x8 << sew) / 8;
+                        }
+                        // _vlmax = _vlen / (0x8 << sew) / 8;
+                    }
+                }else {
+                    // _illmask = (0 << (XLEN-1));
+                    if(lmul == 0){
+                        _vlmax = _vlen / (0x8 << sew);
+                    }else if(lmul == 1){
+                        _vlmax = _vlen / (0x8 << sew) *2;
+                    }else if(lmul == 2){
+                        _vlmax = _vlen / (0x8 << sew) *4;
+                    }else if(lmul == 3){
+                        _vlmax = _vlen / (0x8 << sew) *8;
+                    }
+                }
+                unsigned<32> _avl = 0;
+                if (rs1 != 0){
+                    _avl = X[rs1];
+                }else if(rd != 0){
+                    _avl = ~0;
+                }else{
+                    _avl = CSR[VL_ADDR];
+                }
+
+                unsigned<32> _vl = 0;
+
+                if(_avl <= _vlmax){
+                   _vl = _avl;
+                }else if(_avl >= (2*_vlmax)){
+                   _vl = _vlmax;
+                }else{
+                  // TODO: check
+                   // _vl = (_avl % 0x2) ? _avl/2 +1 : _avl/2; // ceil (AVL/2)
+                   _vl = _vlmax;
+                }
+
+                // if lambda = 0, use current value or largest supported
+                unsigned<3> old_lambda[3] = CSR[VTYPE_ADDR] >> XLEN-4;
+                unsigned<32> L = (_vlen / (0x8 << sew));
+                unsigned<32> emulc = (L >> (old_lambda-1)) >> (old_lambda-1);
+                if (lambda == 0){
+                    if (emulc >= 1 && emulc <= 16){
+                        // current lambda value is still supported, leave it
+                        vtype_result &= ~(0x7 << XLEN-4); // clear xlen-2:xlen-4
+                        vtype_result |= old_lambda << (XLEN-4);
+                    } else {
+                        // should use the largest supported lambda value
+                        if (((L & (L - 1)) == 0) && L < 8192){
+                            // L is power of 2 and three bits are enough for setting lambda
+                            unsigned<3> i = 1;
+                            while (L >= 4){
+                                L = L >> 2;
+                                i += 1;
+                            }
+                            vtype_result &= ~(0x7 << XLEN-4); // clear xlen-2:xlen-4
+                            vtype_result |= i << (XLEN-4);
+                        } else {
+                            vtype_result &= ~(0x7 << XLEN-4);
+                        }       
+                    }
+                } else {
+                    // use biggest lambda value <= than requested. if not, get smallest legal
+                    // should use the biggest supported lambda value
+                    if (((L & (L - 1)) == 0) && L < 8192){
+                        // L is power of 2 and three bits are enough for setting lambda
+                        unsigned<3> i = 1;
+                        while (L >= 4 && !(i >= lambda && L <= 16)){
+                            // break as soon as possible if lambda exceeds write request
+                            L = L >> 2;
+                            i += 1;
+                        }
+                        vtype_result &= ~(0x7 << XLEN-4); // clear xlen-2:xlen-4
+                        vtype_result |= i << (XLEN-4);
+                    } else {
+                        vtype_result &= ~(0x7 << XLEN-4);
+                    }
+                }
+
+                CSR[VL_ADDR] = _vl;
+                // CSR[VTYPE_ADDR] = _illmask | zimm;
+                CSR[VTYPE_ADDR] = vtype_result;
+                if(rd != 0) X[rd] = _vl;
+                CSR[VSTART_ADDR] = 0;
+            }
+
+        }
+
     }
 }
 
