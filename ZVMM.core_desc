@@ -8,6 +8,8 @@ InstructionSet RVZvvi32mm extends RVZve32x {
         extern unsigned<8> vmmacc_vv(char* vector_field, unsigned<XLEN> vtype, unsigned<8> vd, unsigned<8> vs1, unsigned<8> vs2, unsigned<16> vstart, unsigned<32> vlen);
         extern unsigned<8> vwmmacc_vv(char* vector_field, unsigned<XLEN> vtype, unsigned<8> vd, unsigned<8> vs1, unsigned<8> vs2, unsigned<16> vstart, unsigned<32> vlen);
         extern unsigned<8> vqwmmacc_vv(char* vector_field, unsigned<XLEN> vtype, unsigned<8> vd, unsigned<8> vs1, unsigned<8> vs2, unsigned<16> vstart, unsigned<32> vlen);
+        extern unsigned<8> etiss_vmts_v(char* pV, unsigned<32> pVTYPE, unsigned<8> pVm, unsigned<16> vs, unsigned<8> Llambda, unsigned<32> ld, unsigned<32> vstart, unsigned<32> vlen, unsigned<32> vl) [[etiss_needs_arch]];
+        extern unsigned<8> etiss_vmtl_v(char* pV, unsigned<32> pVTYPE, unsigned<8> pVm, unsigned<16> vd, unsigned<8> Llambda, unsigned<32> ld, unsigned<32> vstart, unsigned<32> vlen, unsigned<32> vl) [[etiss_needs_arch]];
     }
 
     instructions {
@@ -52,6 +54,34 @@ InstructionSet RVZvvi32mm extends RVZve32x {
                 unsigned<XLEN> vl = CSR[VL_ADDR];
                 unsigned<XLEN> vlen = CSR[VLENB_ADDR]*8;
                 unsigned<XLEN> ret = vqwmmacc_vv(V, vtype, vd, vs1, vs2, vstart, vlen, vl);
+                CSR[VSTART_ADDR] = 0;
+            }
+        }
+
+        VMTL_V{
+            // encoding: llambda[2:0] :: [100] :: [vm] :: rs2[4:0] :: rs1[4:0] :: [111] :: vd[4:0] :: [0000111];
+            encoding: llambda[2:0] :: 3'b100 :: vm[0:0] :: rs2[4:0] :: rs1[4:0] :: 3'b111 :: vd[4:0] :: 7'b0000111;
+            assembly:"{name(vd)}, {name(rs2)}, {name(rs1)}";
+            behavior: {
+                unsigned<XLEN> vtype = CSR[VTYPE_ADDR];
+                unsigned<XLEN> vstart = CSR[VSTART_ADDR];
+                unsigned<XLEN> vl = CSR[VL_ADDR];
+                unsigned<XLEN> vlen = CSR[VLENB_ADDR]*8;
+                unsigned<XLEN> ret = etiss_vmtl_v(V, vtype, vm, vd, llambda, (unsigned<32>)X[rs2], vstart, vlen, vl, (unsigned<64>)X[rs1]);
+                CSR[VSTART_ADDR] = 0;
+            }
+        }
+
+        VMTS_V{
+            // encoding: llambda[2:0] :: [100] :: [vm] :: rs2[4:0] :: rs1[4:0] :: [111] :: vd[4:0] :: [0100111];
+            encoding: llambda[2:0] :: 3'b100 :: vm[0:0] :: rs2[4:0] :: rs1[4:0] :: 3'b111 :: vd[4:0] :: 7'b0100111;
+            assembly:"{name(vd)}, {name(rs2)}, {name(rs1)}";
+            behavior: {
+                unsigned<XLEN> vtype = CSR[VTYPE_ADDR];
+                unsigned<XLEN> vstart = CSR[VSTART_ADDR];
+                unsigned<XLEN> vl = CSR[VL_ADDR];
+                unsigned<XLEN> vlen = CSR[VLENB_ADDR]*8;
+                unsigned<XLEN> ret = etiss_vmts_v(V, vtype, vm, vd, llambda, (unsigned<32>)X[rs2], vstart, vlen, vl, (unsigned<64>)X[rs1]);
                 CSR[VSTART_ADDR] = 0;
             }
         }
@@ -132,24 +162,32 @@ InstructionSet RVZvvi32mm extends RVZve32x {
 
                 // should use the biggest supported lambda value
                 unsigned<32> L[32] = (vlen / (0x8 << sew));
-                if (((L & (L - 1)) == 0) && L < 8192){
-                    // L is power of 2 and three bits are enough for setting lambda
-                    unsigned<3> i[3] = 1;
-                    while (L >= 4){
-                        L = L >> 2;
-                        i += 1;
-                    }
+                unsigned<3> lambda[3] = (CSR[VTYPE_ADDR] >> XLEN-4) & 0x7;
+                unsigned<32> emulc = (L >> (lambda-1)) >> (lambda-1);
+                if (lambda != 0 && emulc >= 1 && emulc <= 16){
+                    // current lambda value is still supported, leave it
                     vtype_result &= ~(0x7 << XLEN-4); // clear xlen-2:xlen-4
-                    vtype_result |= i << (XLEN-4);
+                    vtype_result |= lambda << (XLEN-4);
                 } else {
-                    vtype_result &= ~(0x7 << XLEN-4);
+                    if (((L & (L - 1)) == 0) && L < 8192){
+                        // L is power of 2 and three bits are enough for setting lambda
+                        unsigned<3> i[3] = 1;
+                        while (L >= 4){
+                            L = L >> 2;
+                            i += 1;
+                        }
+                        vtype_result &= ~(0x7 << XLEN-4); // clear xlen-2:xlen-4
+                        vtype_result |= i << (XLEN-4);
+                    } else {
+                        vtype_result &= ~(0x7 << XLEN-4);
+                    }
                 }
 
                 CSR[VL_ADDR] = _vl;
                 // CSR[VTYPE_ADDR] = _illmask | zimm;
                 CSR[VTYPE_ADDR] = vtype_result;
                 if(rd != 0) X[rd] = _vl;
-                CSR[VSTART_ADDR] = 0;
+                CSR[VSTART_ADDR] = 0;                   
             }
         }
 
@@ -208,19 +246,28 @@ InstructionSet RVZvvi32mm extends RVZve32x {
                   _vl = _vlmax;
                 }
                 
-                // should use the biggest supported lambda value
+
                 unsigned<32> L[32] = (vlen / (0x8 << sew));
-                if (((L & (L - 1)) == 0) && L < 8192){
-                    // L is power of 2 and three bits are enough for setting lambda
-                    unsigned<3> i[3] = 1;
-                    while (L >= 4){
-                        L = L >> 2;
-                        i += 1;
-                    }
+                unsigned<3> lambda[3] = (CSR[VTYPE_ADDR] >> XLEN-4) & 0x7;
+                unsigned<32> emulc = (L >> (lambda-1)) >> (lambda-1);
+                if (lambda != 0 && emulc >= 1 && emulc <= 16){
+                    // current lambda value is still supported, leave it
                     vtype_result &= ~(0x7 << XLEN-4); // clear xlen-2:xlen-4
-                    vtype_result |= i << (XLEN-4);
+                    vtype_result |= lambda << (XLEN-4);
                 } else {
-                    vtype_result &= ~(0x7 << XLEN-4);
+                    // should use the biggest supported lambda value
+                    if (((L & (L - 1)) == 0) && L < 8192){
+                        // L is power of 2 and three bits are enough for setting lambda
+                        unsigned<3> i[3] = 1;
+                        while (L >= 4){
+                            L = L >> 2;
+                            i += 1;
+                        }
+                        vtype_result &= ~(0x7 << XLEN-4); // clear xlen-2:xlen-4
+                        vtype_result |= i << (XLEN-4);
+                    } else {
+                        vtype_result &= ~(0x7 << XLEN-4);
+                    }
                 }
 
                 CSR[VL_ADDR] = _vl;
@@ -241,7 +288,7 @@ InstructionSet RVZvvi32mm extends RVZve32x {
                 unsigned<3> lmul[3] =  vtype_extractLMUL(zimm);
                 unsigned<1> vta[1]  =  vtype_extractTA(zimm);
                 unsigned<1> vma[1]  =  vtype_extractMA(zimm);
-                unsigned<3> lambda[3] = (zimm >> 28);
+                unsigned<3> lambda[3] = (zimm >> 28) & 0x7;
 
                 unsigned<XLEN> _vlmax = 0;
                 // unsigned<XLEN> _illmask = 0;
@@ -302,7 +349,7 @@ InstructionSet RVZvvi32mm extends RVZve32x {
                 }
 
                 // if lambda = 0, use current value or largest supported
-                unsigned<3> old_lambda[3] = CSR[VTYPE_ADDR] >> XLEN-4;
+                unsigned<3> old_lambda[3] = (CSR[VTYPE_ADDR] >> XLEN-4) & 0x7;
                 unsigned<32> L = (_vlen / (0x8 << sew));
                 unsigned<32> emulc = (L >> (old_lambda-1)) >> (old_lambda-1);
                 if (lambda == 0){
